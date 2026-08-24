@@ -9,30 +9,28 @@ export interface VideoItem {
   description?: string;
 }
 
-/*
- * YouTube channel RSS feed.
- *
- * This channel ID is public and does not require
- * YouTube Data API authentication.
- */
-const YOUTUBE_RSS_URL =
-  `https://www.youtube.com/feeds/videos.xml?channel_id=${encodeURIComponent(
-    config.youtubeChannelId || 'UCQkZM4HnzC6PJOs7WQZwAEA'
-  )}`;
-
-/*
- * Server-side cache.
- *
- * The frontend can request /api/videos every 15 seconds,
- * but the server only fetches YouTube RSS every 5 minutes.
- */
-let cachedVideos: VideoItem[] = [];
-let cachedAt = 0;
+const DEFAULT_CHANNEL_ID = 'UCQkZM4HnzC6PJOs7WQZwAEA';
 
 const CACHE_DURATION = 5 * 60 * 1000;
 
-/*
- * Simple XML entity decoder.
+let cachedVideos: VideoItem[] = [];
+let cachedAt = 0;
+
+/**
+ * Build the RSS URL from the configured channel ID.
+ */
+function getRSSUrl(): string {
+  const channelId =
+    config.youtubeChannelId?.trim() ||
+    DEFAULT_CHANNEL_ID;
+
+  return `https://www.youtube.com/feeds/videos.xml?channel_id=${encodeURIComponent(
+    channelId
+  )}`;
+}
+
+/**
+ * Decode common XML entities.
  */
 function decodeXml(value: string): string {
   return value
@@ -44,15 +42,20 @@ function decodeXml(value: string): string {
     .replace(/&#x27;/g, "'");
 }
 
-/*
+/**
  * Extract the contents of an XML tag.
  */
 function getTag(
   xml: string,
   tag: string
 ): string {
+  const escapedTag = tag.replace(
+    /[-/\\^$*+?.()|[\]{}]/g,
+    '\\$&'
+  );
+
   const regex = new RegExp(
-    `<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)</${tag}>`,
+    `<${escapedTag}(?:\\s[^>]*)?>([\\s\\S]*?)</${escapedTag}>`,
     'i'
   );
 
@@ -63,20 +66,25 @@ function getTag(
     : '';
 }
 
-/*
- * Extract all <entry>...</entry> blocks.
+/**
+ * Extract every YouTube <entry>.
  */
 function getEntries(xml: string): string[] {
-  return xml.match(
-    /<entry\b[\s\S]*?<\/entry>/gi
-  ) || [];
+  return (
+    xml.match(
+      /<entry\b[\s\S]*?<\/entry>/gi
+    ) || []
+  );
 }
 
-/*
- * Extract the YouTube video ID from an entry.
+/**
+ * Extract YouTube video ID.
  */
 function getVideoId(entry: string): string {
-  const videoId = getTag(entry, 'yt:videoId');
+  const videoId = getTag(
+    entry,
+    'yt:videoId'
+  );
 
   if (videoId) {
     return videoId;
@@ -89,8 +97,8 @@ function getVideoId(entry: string): string {
   return linkMatch?.[1] || '';
 }
 
-/*
- * Extract thumbnail URL.
+/**
+ * Get YouTube thumbnail.
  */
 function getThumbnail(
   entry: string,
@@ -104,22 +112,21 @@ function getThumbnail(
     return mediaMatch[1];
   }
 
-  /*
-   * YouTube's standard thumbnail URL.
-   */
   return videoId
     ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`
     : '';
 }
 
-/*
- * Fetch latest videos from YouTube RSS.
+/**
+ * Fetch videos directly from YouTube RSS.
  */
 async function fetchFromRSS(): Promise<VideoItem[]> {
-  const response = await fetch(YOUTUBE_RSS_URL, {
+  const rssUrl = getRSSUrl();
+
+  const response = await fetch(rssUrl, {
     headers: {
       'User-Agent':
-        'CokeBoysClient/1.0 YouTubeRSSReader',
+        'CokeBoysClient/1.0 RSS Reader',
       Accept:
         'application/atom+xml, application/xml, text/xml',
     },
@@ -133,7 +140,10 @@ async function fetchFromRSS(): Promise<VideoItem[]> {
 
   const xml = await response.text();
 
-  if (!xml || !xml.includes('<feed')) {
+  if (
+    !xml ||
+    !/<feed\b/i.test(xml)
+  ) {
     throw new Error(
       'YouTube RSS returned an invalid feed.'
     );
@@ -159,17 +169,18 @@ async function fetchFromRSS(): Promise<VideoItem[]> {
         new Date().toISOString();
 
       const description =
-        getTag(entry, 'media:description') ||
+        getTag(
+          entry,
+          'media:description'
+        ) ||
         getTag(entry, 'summary') ||
         '';
 
       return {
         id,
         title,
-        thumbnailUrl: getThumbnail(
-          entry,
-          id
-        ),
+        thumbnailUrl:
+          getThumbnail(entry, id),
         publishedAt,
         videoUrl:
           `https://www.youtube.com/watch?v=${id}`,
@@ -177,23 +188,31 @@ async function fetchFromRSS(): Promise<VideoItem[]> {
       };
     })
     .filter(
-      (video): video is VideoItem =>
+      (
+        video
+      ): video is VideoItem =>
         video !== null
     );
 
   /*
-   * RSS normally returns newest uploads first.
-   * Sort again to guarantee newest → oldest.
+   * Newest videos first.
    */
   videos.sort(
     (a, b) =>
-      new Date(b.publishedAt).getTime() -
-      new Date(a.publishedAt).getTime()
+      new Date(
+        b.publishedAt
+      ).getTime() -
+      new Date(
+        a.publishedAt
+      ).getTime()
   );
 
   return videos;
 }
 
+/**
+ * Main video service.
+ */
 export async function fetchChannelVideos(): Promise<{
   videos: VideoItem[];
   source: 'rss' | 'cache' | 'fallback';
@@ -202,7 +221,7 @@ export async function fetchChannelVideos(): Promise<{
   const now = Date.now();
 
   /*
-   * Return cached videos if they are still fresh.
+   * Serve cache for 5 minutes.
    */
   if (
     cachedVideos.length > 0 &&
@@ -212,16 +231,21 @@ export async function fetchChannelVideos(): Promise<{
       videos: cachedVideos,
       source: 'cache',
       lastUpdated:
-        new Date(cachedAt).toISOString(),
+        new Date(
+          cachedAt
+        ).toISOString(),
     };
   }
 
   try {
+    const rssUrl = getRSSUrl();
+
     console.log(
-      `[YouTube RSS] Fetching latest videos from ${YOUTUBE_RSS_URL}`
+      `[YouTube RSS] Fetching: ${rssUrl}`
     );
 
-    const videos = await fetchFromRSS();
+    const videos =
+      await fetchFromRSS();
 
     if (videos.length === 0) {
       throw new Error(
@@ -230,7 +254,7 @@ export async function fetchChannelVideos(): Promise<{
     }
 
     /*
-     * Store successful result.
+     * Save successful result.
      */
     cachedVideos = videos;
     cachedAt = Date.now();
@@ -243,37 +267,39 @@ export async function fetchChannelVideos(): Promise<{
       videos,
       source: 'rss',
       lastUpdated:
-        new Date(cachedAt).toISOString(),
+        new Date(
+          cachedAt
+        ).toISOString(),
     };
 
   } catch (error) {
     console.error(
-      '[YouTube RSS] Failed to fetch feed:',
+      '[YouTube RSS] Fetch failed:',
       error
     );
 
     /*
-     * If YouTube temporarily fails but we have an older
-     * cache, continue serving the old videos.
+     * Serve old cache if YouTube temporarily fails.
      */
     if (cachedVideos.length > 0) {
       return {
         videos: cachedVideos,
         source: 'cache',
         lastUpdated:
-          new Date(cachedAt).toISOString(),
+          new Date(
+            cachedAt
+          ).toISOString(),
       };
     }
 
     /*
-     * No API and no cached data.
-     *
-     * Return an empty array instead of inventing fake videos.
+     * Do NOT generate fake videos.
      */
     return {
       videos: [],
       source: 'fallback',
-      lastUpdated: new Date().toISOString(),
+      lastUpdated:
+        new Date().toISOString(),
     };
   }
-}
+        }
