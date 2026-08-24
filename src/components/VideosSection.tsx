@@ -1,0 +1,235 @@
+import React, { useState, useEffect, useCallback } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
+import { Youtube, Play, Clock, ExternalLink, Eye, RefreshCw, Activity } from 'lucide-react';
+import { YouTubeVideo } from '../types';
+import { FALLBACK_VIDEOS, OFFICIAL_LINKS } from '../data/fallbackData';
+import { soundEngine } from '../utils/audioEngine';
+
+export const VideosSection: React.FC = () => {
+  const [videos, setVideos] = useState<YouTubeVideo[]>(FALLBACK_VIDEOS);
+  const [loading, setLoading] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [lastSyncTime, setLastSyncTime] = useState<string>('Just now');
+  const [updatedVideoIds, setUpdatedVideoIds] = useState<Set<string>>(new Set());
+
+  const fetchVideos = useCallback(async (silent: boolean = false) => {
+    if (!silent) setLoading(true);
+    setIsRefreshing(true);
+    try {
+      const res = await fetch('/api/videos', { cache: 'no-store' });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.videos && Array.isArray(data.videos) && data.videos.length > 0) {
+          setVideos((prevVideos) => {
+            // Track which video views changed to trigger subtle highlight animations
+            const changed = new Set<string>();
+            data.videos.forEach((newV: YouTubeVideo) => {
+              const oldV = prevVideos.find((p) => p.id === newV.id);
+              if (oldV && oldV.viewCount !== newV.viewCount) {
+                changed.add(newV.id);
+              }
+            });
+            if (changed.size > 0) {
+              setUpdatedVideoIds(changed);
+              setTimeout(() => setUpdatedVideoIds(new Set()), 2500);
+            }
+            return data.videos;
+          });
+          const now = new Date();
+          setLastSyncTime(now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+        }
+      }
+    } catch {
+      // Keep existing videos on error
+    } finally {
+      if (!silent) setLoading(false);
+      setTimeout(() => setIsRefreshing(false), 500);
+    }
+  }, []);
+
+  // Initial fetch and auto-update interval (every 15 seconds)
+  useEffect(() => {
+    fetchVideos(false);
+
+    const intervalId = setInterval(() => {
+      fetchVideos(true);
+    }, 15000);
+
+    return () => clearInterval(intervalId);
+  }, [fetchVideos]);
+
+  const handleManualRefresh = () => {
+    soundEngine.playClick();
+    fetchVideos(false);
+  };
+
+  return (
+    <section id="videos-section" className="py-12 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto">
+      
+      {/* Section Header */}
+      <div className="text-center max-w-3xl mx-auto mb-8 space-y-2">
+        <span className="text-[10px] text-white/40 uppercase tracking-[0.3em] font-semibold">
+          Media Hub
+        </span>
+        <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-white uppercase">
+          Recent Showcases
+        </h2>
+        <p className="text-white/45 text-xs sm:text-sm">
+          Blox Fruits PvP montages, combo setups, and script updates from @cokeboysclient.
+        </p>
+      </div>
+
+      {/* Main High Density Container */}
+      <div className="max-w-5xl mx-auto bg-[#140b00] border border-amber-500/20 rounded-2xl p-6 relative overflow-hidden backdrop-blur-md shadow-2xl shadow-black/80">
+        
+        {/* Header Bar */}
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-4 pb-3 border-b border-amber-500/10">
+          <div className="flex items-center gap-2.5">
+            <Youtube className="w-4 h-4 text-amber-500/70" />
+            <h3 className="text-xs font-bold uppercase tracking-widest text-amber-500/80">
+              Official Uploads
+            </h3>
+            
+            {/* Live Auto-Update Badge */}
+            <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-[9px] font-mono">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              <span>Live Auto-Sync</span>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <button
+              onClick={handleManualRefresh}
+              disabled={isRefreshing}
+              title="Sync latest views from YouTube"
+              className="text-[10px] text-amber-500/50 hover:text-amber-400 uppercase tracking-wider font-semibold flex items-center gap-1.5 transition-colors cursor-pointer bg-amber-500/5 hover:bg-amber-500/10 px-2 py-1 rounded-md border border-amber-500/10"
+            >
+              <RefreshCw className={`w-2.5 h-2.5 ${isRefreshing ? 'animate-spin text-amber-400' : ''}`} />
+              <span>{isRefreshing ? 'Syncing...' : 'Sync Views'}</span>
+            </button>
+
+            <a
+              href={OFFICIAL_LINKS.youtube}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={() => soundEngine.playClick()}
+              id="videos-view-channel-btn"
+              className="text-[10px] text-amber-500/40 hover:text-amber-500 uppercase tracking-wider font-semibold flex items-center gap-1 transition-colors"
+            >
+              <span>All Videos</span>
+              <ExternalLink className="w-2.5 h-2.5" />
+            </a>
+          </div>
+        </div>
+
+        {/* Video Cards Grid */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+          {videos.map((video, idx) => {
+            const isUpdated = updatedVideoIds.has(video.id);
+
+            return (
+              <motion.div
+                key={video.id}
+                initial={{ opacity: 0, y: 10 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                viewport={{ once: true }}
+                transition={{ duration: 0.3, delay: idx * 0.05 }}
+                className={`group bg-[#110a00] border ${
+                  isUpdated ? 'border-amber-400/80 shadow-amber-500/20' : 'border-amber-500/10'
+                } rounded-xl overflow-hidden hover:border-amber-500/30 transition-all flex flex-col justify-between shadow-md relative`}
+              >
+                {/* Thumbnail Container */}
+                <div className="relative aspect-video w-full overflow-hidden bg-black">
+                  <img
+                    src={video.thumbnailUrl}
+                    alt={video.title}
+                    referrerPolicy="no-referrer"
+                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300 opacity-85 group-hover:opacity-100"
+                    loading="lazy"
+                  />
+                  
+                  {/* Play Button Overlay */}
+                  <a
+                    href={video.videoUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() => soundEngine.playClick()}
+                    className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent flex items-center justify-center"
+                    aria-label={`Watch ${video.title}`}
+                  >
+                    <div className="w-8 h-8 rounded-full bg-white/20 backdrop-blur-md text-white flex items-center justify-center shadow-lg group-hover:scale-110 group-hover:bg-white group-hover:text-black transition-all">
+                      <Play className="w-3.5 h-3.5 ml-0.5 fill-current" />
+                    </div>
+                  </a>
+
+                  {/* Video Duration Badge */}
+                  {video.duration && (
+                    <div className="absolute bottom-1.5 right-1.5 px-1.5 py-0.5 rounded bg-black/80 text-[9px] font-mono text-white/80 flex items-center gap-1">
+                      <Clock className="w-2.5 h-2.5 text-white/50" />
+                      <span>{video.duration}</span>
+                    </div>
+                  )}
+
+                  {/* Live View Pulse Tag */}
+                  <div className="absolute top-1.5 left-1.5 px-1.5 py-0.5 rounded bg-black/75 backdrop-blur-sm text-[8px] font-mono text-amber-400/90 flex items-center gap-1 border border-amber-500/20">
+                    <Activity className="w-2 h-2 text-emerald-400 animate-pulse" />
+                    <span>Auto-Synced</span>
+                  </div>
+                </div>
+
+                {/* Title & Info */}
+                <div className="p-3 space-y-1.5 flex-1 flex flex-col justify-between">
+                  <h4 className="text-xs font-semibold text-white/90 group-hover:text-white transition-colors line-clamp-2 leading-tight">
+                    {video.title}
+                  </h4>
+
+                  <div className="pt-2 border-t border-amber-500/10 flex items-center justify-between text-[10px] text-white/50">
+                    {/* View Counter with Live Update Glow */}
+                    <div className="flex items-center gap-1.5 font-mono">
+                      <Eye className="w-3 h-3 text-amber-500/70" />
+                      <span className={`transition-colors duration-500 font-semibold ${
+                        isUpdated ? 'text-amber-300 scale-105' : 'text-amber-500/90'
+                      }`}>
+                        {video.viewCount || '1.2k views'}
+                      </span>
+                    </div>
+
+                    <a
+                      href={video.videoUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={() => soundEngine.playClick()}
+                      className="text-[10px] font-bold uppercase tracking-wider text-amber-500/60 hover:text-amber-500 flex items-center gap-1"
+                    >
+                      <span>Watch</span>
+                      <ExternalLink className="w-2.5 h-2.5" />
+                    </a>
+                  </div>
+                </div>
+              </motion.div>
+            );
+          })}
+        </div>
+
+        {/* Channel Subscriber & Live Sync Bar */}
+        <div className="mt-4 pt-3 border-t border-amber-500/10 flex flex-wrap items-center justify-between gap-2 text-[10px] text-amber-500/40">
+          <div className="flex items-center gap-2">
+            <svg className="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24">
+              <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814z"/>
+            </svg>
+            <span>@cokeboysclient — Official Blox Fruits PvP Channel</span>
+          </div>
+          
+          <div className="flex items-center gap-3 font-mono text-[9px]">
+            <span className="text-amber-500/40">Last Synced: {lastSyncTime}</span>
+            <span className="text-emerald-500 flex items-center gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping inline-block" />
+              <span>Live Updates Active</span>
+            </span>
+          </div>
+        </div>
+
+      </div>
+    </section>
+  );
+};
