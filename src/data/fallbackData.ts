@@ -14,3 +14,6 @@ export const INITIAL_EXECUTORS = {
   lastUpdated: '2026-08-23',
 };
 
+
+// Fallback data used when YouTube videos cannot be loaded.
+export const FALLBACK_VIDEOS = [];
