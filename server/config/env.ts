@@ -9,8 +9,7 @@ export const config = {
   youtubeApiKey: process.env.YOUTUBE_API_KEY || '',
 
   youtubeChannelId:
-    process.env.YOUTUBE_CHANNEL_ID ||
-    'UCQkZM4HnzC6PJOs7WQZwAEA',
+    process.env.YOUTUBE_CHANNEL_ID || '',
 
   corsOrigin: process.env.CORS_ORIGIN || '*',
 };
