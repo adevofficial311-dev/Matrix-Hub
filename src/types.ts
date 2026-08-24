@@ -10,21 +10,30 @@ export interface YouTubeVideo {
   title: string;
   thumbnailUrl: string;
   publishedAt: string;
+  videoUrl: string;
+  description?: string;
+
+  // Optional fields kept for compatibility
   duration?: string;
   viewCount?: string;
   rawViews?: number;
-  videoUrl: string;
-  description?: string;
 }
 
 export interface VideoResponse {
   videos: YouTubeVideo[];
   channelUrl: string;
-  source: 'api' | 'fallback';
+
+  // RSS is now the primary source
+  source: 'rss' | 'fallback';
+
   lastUpdated?: string;
 }
 
-export type MusicTrack = 'welcome' | 'main' | 'status' | 'videos';
+export type MusicTrack =
+  | 'welcome'
+  | 'main'
+  | 'status'
+  | 'videos';
 
 export interface AudioSettings {
   isPlaying: boolean;
