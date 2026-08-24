@@ -1,3 +1,4 @@
+
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -9,10 +10,12 @@ export const config = {
   ),
 
   nodeEnv:
-    process.env.NODE_ENV || 'development',
+    process.env.NODE_ENV ||
+    'development',
 
   youtubeChannelId:
-    process.env.YOUTUBE_CHANNEL_ID || '',
+    process.env.YOUTUBE_CHANNEL_ID ||
+    'UCQkZM4HnzC6PJOs7WQZwAEA',
 
   corsOrigin:
     process.env.CORS_ORIGIN || '*',
