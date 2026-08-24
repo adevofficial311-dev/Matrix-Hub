@@ -79,7 +79,7 @@ export const Footer: React.FC = () => {
         <div className="pt-4 border-t border-amber-500/10 flex flex-col sm:flex-row items-center justify-between text-[10px] text-amber-500/30 uppercase tracking-[0.2em] gap-3 text-center sm:text-left">
           <span>&copy; {new Date().getFullYear()} CokeBoys Client. All Rights Reserved.</span>
           <div className="flex gap-6">
-            <span>High Density Engine</span>
+            <span>Powered By FaceBook & Telegr4m</span>
             <span className="flex items-center gap-2">
               <span className="w-1 h-1 bg-amber-500/40 rounded-full" />
               Blox Fruits PvP Script
