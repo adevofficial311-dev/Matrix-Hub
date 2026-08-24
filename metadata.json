@@ -1,0 +1,6 @@
+{
+  "name": "CokeBoys Client",
+  "description": "Official website for the CokeBoys Client Blox Fruits PvP community featuring script access, key systems, executor compatibility status, YouTube videos, and interactive Easter eggs.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
