@@ -5,324 +5,275 @@ export interface VideoItem {
   title: string;
   thumbnailUrl: string;
   publishedAt: string;
-  duration?: string;
-  viewCount?: string;
-  rawViews?: number;
   videoUrl: string;
   description?: string;
 }
 
-export function parseISO8601Duration(
-  durationString?: string
-): string | undefined {
-  if (!durationString) return undefined;
+/*
+ * YouTube channel RSS feed.
+ *
+ * This channel ID is public and does not require
+ * YouTube Data API authentication.
+ */
+const YOUTUBE_RSS_URL =
+  `https://www.youtube.com/feeds/videos.xml?channel_id=${encodeURIComponent(
+    config.youtubeChannelId || 'UCQkZM4HnzC6PJOs7WQZwAEA'
+  )}`;
 
-  if (!durationString.startsWith('PT')) {
-    return durationString;
-  }
+/*
+ * Server-side cache.
+ *
+ * The frontend can request /api/videos every 15 seconds,
+ * but the server only fetches YouTube RSS every 5 minutes.
+ */
+let cachedVideos: VideoItem[] = [];
+let cachedAt = 0;
 
-  const match = durationString.match(
-    /PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/
-  );
+const CACHE_DURATION = 5 * 60 * 1000;
 
-  if (!match) return durationString;
-
-  const hours = match[1] ? parseInt(match[1], 10) : 0;
-  const minutes = match[2] ? parseInt(match[2], 10) : 0;
-  const seconds = match[3] ? parseInt(match[3], 10) : 0;
-
-  const formattedSeconds = seconds
-    .toString()
-    .padStart(2, '0');
-
-  if (hours > 0) {
-    const formattedMinutes = minutes
-      .toString()
-      .padStart(2, '0');
-
-    return `${hours}:${formattedMinutes}:${formattedSeconds}`;
-  }
-
-  return `${minutes}:${formattedSeconds}`;
+/*
+ * Simple XML entity decoder.
+ */
+function decodeXml(value: string): string {
+  return value
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&#x27;/g, "'");
 }
 
-export function formatViewCount(views: number): string {
-  if (views >= 1_000_000) {
-    return `${(views / 1_000_000).toFixed(1)}M views`;
+/*
+ * Extract the contents of an XML tag.
+ */
+function getTag(
+  xml: string,
+  tag: string
+): string {
+  const regex = new RegExp(
+    `<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)</${tag}>`,
+    'i'
+  );
+
+  const match = xml.match(regex);
+
+  return match
+    ? decodeXml(match[1].trim())
+    : '';
+}
+
+/*
+ * Extract all <entry>...</entry> blocks.
+ */
+function getEntries(xml: string): string[] {
+  return xml.match(
+    /<entry\b[\s\S]*?<\/entry>/gi
+  ) || [];
+}
+
+/*
+ * Extract the YouTube video ID from an entry.
+ */
+function getVideoId(entry: string): string {
+  const videoId = getTag(entry, 'yt:videoId');
+
+  if (videoId) {
+    return videoId;
   }
 
-  if (views >= 1_000) {
-    return `${(views / 1_000).toFixed(1)}K views`;
+  const linkMatch = entry.match(
+    /<link[^>]+href=["']https?:\/\/(?:www\.)?youtube\.com\/watch\?v=([^"&']+)/i
+  );
+
+  return linkMatch?.[1] || '';
+}
+
+/*
+ * Extract thumbnail URL.
+ */
+function getThumbnail(
+  entry: string,
+  videoId: string
+): string {
+  const mediaMatch = entry.match(
+    /<media:thumbnail[^>]+url=["']([^"']+)["']/i
+  );
+
+  if (mediaMatch?.[1]) {
+    return mediaMatch[1];
   }
 
-  return `${views.toLocaleString()} views`;
+  /*
+   * YouTube's standard thumbnail URL.
+   */
+  return videoId
+    ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`
+    : '';
+}
+
+/*
+ * Fetch latest videos from YouTube RSS.
+ */
+async function fetchFromRSS(): Promise<VideoItem[]> {
+  const response = await fetch(YOUTUBE_RSS_URL, {
+    headers: {
+      'User-Agent':
+        'CokeBoysClient/1.0 YouTubeRSSReader',
+      Accept:
+        'application/atom+xml, application/xml, text/xml',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `YouTube RSS returned HTTP ${response.status}`
+    );
+  }
+
+  const xml = await response.text();
+
+  if (!xml || !xml.includes('<feed')) {
+    throw new Error(
+      'YouTube RSS returned an invalid feed.'
+    );
+  }
+
+  const entries = getEntries(xml);
+
+  const videos: VideoItem[] = entries
+    .map((entry): VideoItem | null => {
+      const id = getVideoId(entry);
+
+      if (!id) {
+        return null;
+      }
+
+      const title =
+        getTag(entry, 'title') ||
+        'YouTube Video';
+
+      const publishedAt =
+        getTag(entry, 'published') ||
+        getTag(entry, 'updated') ||
+        new Date().toISOString();
+
+      const description =
+        getTag(entry, 'media:description') ||
+        getTag(entry, 'summary') ||
+        '';
+
+      return {
+        id,
+        title,
+        thumbnailUrl: getThumbnail(
+          entry,
+          id
+        ),
+        publishedAt,
+        videoUrl:
+          `https://www.youtube.com/watch?v=${id}`,
+        description,
+      };
+    })
+    .filter(
+      (video): video is VideoItem =>
+        video !== null
+    );
+
+  /*
+   * RSS normally returns newest uploads first.
+   * Sort again to guarantee newest → oldest.
+   */
+  videos.sort(
+    (a, b) =>
+      new Date(b.publishedAt).getTime() -
+      new Date(a.publishedAt).getTime()
+  );
+
+  return videos;
 }
 
 export async function fetchChannelVideos(): Promise<{
   videos: VideoItem[];
-  source: 'api' | 'fallback';
+  source: 'rss' | 'cache' | 'fallback';
   lastUpdated: string;
 }> {
-  const lastUpdated = new Date().toISOString();
+  const now = Date.now();
 
   /*
-   * Make sure the required Railway variables exist.
+   * Return cached videos if they are still fresh.
    */
-  if (!config.youtubeApiKey) {
-    console.error(
-      '[YouTube] YOUTUBE_API_KEY is missing.'
-    );
-
+  if (
+    cachedVideos.length > 0 &&
+    now - cachedAt < CACHE_DURATION
+  ) {
     return {
-      videos: [],
-      source: 'fallback',
-      lastUpdated,
-    };
-  }
-
-  if (!config.youtubeChannelId) {
-    console.error(
-      '[YouTube] YOUTUBE_CHANNEL_ID is missing.'
-    );
-
-    return {
-      videos: [],
-      source: 'fallback',
-      lastUpdated,
+      videos: cachedVideos,
+      source: 'cache',
+      lastUpdated:
+        new Date(cachedAt).toISOString(),
     };
   }
 
   try {
-    /*
-     * STEP 1
-     *
-     * Get the newest videos from ONLY the configured channel.
-     *
-     * This replaces the old:
-     *
-     * q=CokeBoys Client Roblox
-     *
-     * search.
-     */
-    const searchUrl = new URL(
-      'https://www.googleapis.com/youtube/v3/search'
+    console.log(
+      `[YouTube RSS] Fetching latest videos from ${YOUTUBE_RSS_URL}`
     );
 
-    searchUrl.searchParams.set(
-      'key',
-      config.youtubeApiKey
-    );
+    const videos = await fetchFromRSS();
 
-    searchUrl.searchParams.set(
-      'channelId',
-      config.youtubeChannelId
-    );
-
-    searchUrl.searchParams.set(
-      'part',
-      'snippet,id'
-    );
-
-    searchUrl.searchParams.set(
-      'order',
-      'date'
-    );
-
-    searchUrl.searchParams.set(
-      'maxResults',
-      '8'
-    );
-
-    searchUrl.searchParams.set(
-      'type',
-      'video'
-    );
-
-    const searchRes = await fetch(searchUrl);
-
-    if (!searchRes.ok) {
-      const errorText = await searchRes.text();
-
-      console.error(
-        `[YouTube] Search API returned ${searchRes.status}:`,
-        errorText
+    if (videos.length === 0) {
+      throw new Error(
+        'YouTube RSS returned zero videos.'
       );
-
-      return {
-        videos: [],
-        source: 'fallback',
-        lastUpdated,
-      };
-    }
-
-    const searchData = await searchRes.json();
-
-    if (
-      !Array.isArray(searchData.items) ||
-      searchData.items.length === 0
-    ) {
-      console.warn(
-        `[YouTube] No videos found for channel ${config.youtubeChannelId}`
-      );
-
-      return {
-        videos: [],
-        source: 'fallback',
-        lastUpdated,
-      };
     }
 
     /*
-     * Extract the video IDs.
+     * Store successful result.
      */
-    const videoIds = searchData.items
-      .map((item: any) => item.id?.videoId)
-      .filter(Boolean);
-
-    if (videoIds.length === 0) {
-      console.warn(
-        '[YouTube] No valid video IDs returned.'
-      );
-
-      return {
-        videos: [],
-        source: 'fallback',
-        lastUpdated,
-      };
-    }
-
-    /*
-     * STEP 2
-     *
-     * Fetch statistics and duration for those videos.
-     */
-    const statsUrl = new URL(
-      'https://www.googleapis.com/youtube/v3/videos'
-    );
-
-    statsUrl.searchParams.set(
-      'key',
-      config.youtubeApiKey
-    );
-
-    statsUrl.searchParams.set(
-      'id',
-      videoIds.join(',')
-    );
-
-    statsUrl.searchParams.set(
-      'part',
-      'snippet,statistics,contentDetails'
-    );
-
-    const statsRes = await fetch(statsUrl);
-
-    if (!statsRes.ok) {
-      const errorText = await statsRes.text();
-
-      console.error(
-        `[YouTube] Videos API returned ${statsRes.status}:`,
-        errorText
-      );
-
-      return {
-        videos: [],
-        source: 'fallback',
-        lastUpdated,
-      };
-    }
-
-    const statsData = await statsRes.json();
-
-    /*
-     * Create a map:
-     *
-     * video ID → video details
-     */
-    const statsMap = new Map<string, any>();
-
-    if (Array.isArray(statsData.items)) {
-      for (const item of statsData.items) {
-        statsMap.set(item.id, item);
-      }
-    }
-
-    /*
-     * Convert the YouTube response into the
-     * structure expected by VideosSection.tsx.
-     */
-    const videos: VideoItem[] = searchData.items
-      .map((item: any) => {
-        const videoId = item.id?.videoId;
-
-        if (!videoId) {
-          return null;
-        }
-
-        const detail = statsMap.get(videoId);
-
-        const rawViews = Number(
-          detail?.statistics?.viewCount || 0
-        );
-
-        return {
-          id: videoId,
-
-          title:
-            item.snippet?.title ||
-            'YouTube Video',
-
-          thumbnailUrl:
-            item.snippet?.thumbnails?.high?.url ||
-            item.snippet?.thumbnails?.medium?.url ||
-            item.snippet?.thumbnails?.default?.url ||
-            '',
-
-          publishedAt:
-            item.snippet?.publishedAt ||
-            new Date().toISOString(),
-
-          duration:
-            parseISO8601Duration(
-              detail?.contentDetails?.duration
-            ),
-
-          rawViews,
-
-          viewCount:
-            rawViews > 0
-              ? formatViewCount(rawViews)
-              : '0 views',
-
-          videoUrl:
-            `https://www.youtube.com/watch?v=${videoId}`,
-
-          description:
-            item.snippet?.description || '',
-        };
-      })
-      .filter(Boolean) as VideoItem[];
+    cachedVideos = videos;
+    cachedAt = Date.now();
 
     console.log(
-      `[YouTube] Successfully fetched ${videos.length} videos from ${config.youtubeChannelId}`
+      `[YouTube RSS] Loaded ${videos.length} videos.`
     );
 
     return {
       videos,
-      source: 'api',
-      lastUpdated,
+      source: 'rss',
+      lastUpdated:
+        new Date(cachedAt).toISOString(),
     };
 
   } catch (error) {
     console.error(
-      '[YouTube] API request failed:',
+      '[YouTube RSS] Failed to fetch feed:',
       error
     );
 
+    /*
+     * If YouTube temporarily fails but we have an older
+     * cache, continue serving the old videos.
+     */
+    if (cachedVideos.length > 0) {
+      return {
+        videos: cachedVideos,
+        source: 'cache',
+        lastUpdated:
+          new Date(cachedAt).toISOString(),
+      };
+    }
+
+    /*
+     * No API and no cached data.
+     *
+     * Return an empty array instead of inventing fake videos.
+     */
     return {
       videos: [],
       source: 'fallback',
-      lastUpdated,
+      lastUpdated: new Date().toISOString(),
     };
   }
-      }
+}
