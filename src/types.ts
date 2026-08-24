@@ -13,7 +13,7 @@ export interface YouTubeVideo {
   videoUrl: string;
   description?: string;
 
-  // Optional fields kept for compatibility
+  // Optional compatibility fields
   duration?: string;
   viewCount?: string;
   rawViews?: number;
@@ -23,8 +23,8 @@ export interface VideoResponse {
   videos: YouTubeVideo[];
   channelUrl: string;
 
-  // RSS is now the primary source
-  source: 'rss' | 'fallback';
+  // RSS + server-side cache
+  source: 'rss' | 'cache' | 'fallback';
 
   lastUpdated?: string;
 }
